@@ -19,6 +19,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { authenticateToken, JWT_SECRET } = require('./middleware/auth');
 const { isLocalPath, deleteIfUnused } = require('./utils/imageCleanup');
+const security = require('./security');
+const { attachWsHub, normalizeOrderItems, authBypassEnabled, resolveTenant, tenantRequired } = security;
 
 let helmet = null;
 let rateLimit = null;
@@ -106,6 +108,18 @@ const apiLimiter = rateLimit
       windowMs: 15 * 60 * 1000,
       max: Number(process.env.API_RATE_LIMIT_MAX || 300),
     });
+
+// Chat com IA em streaming é público (usado pelo cliente), por isso tem limite próprio por IP
+const CHAT_LIMIT_MAX = Number(process.env.CHAT_RATE_LIMIT_MAX || 10);
+const chatStreamLimiter = rateLimit
+  ? rateLimit({
+      windowMs: 60 * 1000,
+      max: CHAT_LIMIT_MAX,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Muitas mensagens ao assistente. Tente novamente em instantes.' },
+    })
+  : createFallbackRateLimiter({ windowMs: 60 * 1000, max: CHAT_LIMIT_MAX });
 
 // CORS: Configuração melhorada para desenvolvimento e produção
 const isDevelopment = process.env.NODE_ENV !== 'production';
@@ -211,19 +225,6 @@ server.on('error', (error) => {
 const wss = new WebSocket.Server({ noServer: true });
 const WS_HEARTBEAT_INTERVAL_MS = Number(process.env.WS_HEARTBEAT_INTERVAL_MS || 30000);
 
-// Função para broadcast de mensagens para todos os clientes
-wss.broadcast = function broadcast(data) {
-  wss.clients.forEach(function each(client) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data, (err) => {
-        if (err) {
-          console.error('Erro ao enviar mensagem para o cliente:', err);
-        }
-      });
-    }
-  });
-};
-
 const sendWsJson = (ws, payload) => {
   if (ws.readyState !== WebSocket.OPEN) return;
 
@@ -234,12 +235,8 @@ const sendWsJson = (ws, payload) => {
   });
 };
 
-// Anexar o servidor WebSocket ao servidor HTTP
-server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, ws => {
-    wss.emit('connection', ws, request);
-  });
-});
+// Anexar o servidor WebSocket ao servidor HTTP: autenticação e isolamento por restaurante
+attachWsHub({ wss, server, verifyToken: (t) => jwt.verify(t, JWT_SECRET), WebSocket });
 
 // Lógica de conexão WebSocket
 // Tratamento de erro geral para o servidor WebSocket
@@ -312,7 +309,7 @@ const watchLogFile = (source) => {
           return;
         }
         // Transmite a atualização para todos os clientes
-        wss.broadcast(JSON.stringify({
+        wss.broadcastTo(req.restaurant_id, JSON.stringify({
           type: 'LOG_DATA',
           payload: { source, content }
         }));
@@ -332,9 +329,11 @@ wss.on('connection', ws => {
   console.log('Cliente WebSocket conectado e recebendo logs.');
   ws.isAlive = true;
 
-  // Envia o conteúdo atual dos logs assim que o cliente se conecta
-  sendLogFile(ws, 'stdout');
-  sendLogFile(ws, 'stderr');
+  // Logs do servidor: só para superadmin (contêm dados internos)
+  if (ws.isSuperadmin) {
+    sendLogFile(ws, 'stdout');
+    sendLogFile(ws, 'stderr');
+  }
 
   ws.on('message', (msg) => {
     try {
@@ -367,40 +366,46 @@ wss.on('connection', ws => {
 
 
 // --- Middleware SaaS (Multi-tenant) ---
+// Com token válido, o restaurante vem sempre do token (o cabeçalho é ignorado).
+// Sem token, usa x-restaurant-id. Sem nenhum dos dois, só usa DEFAULT_RESTAURANT_ID se o
+// operador o tiver configurado; caso contrário o pedido é recusado em requireTenant.
 const extractTenant = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  
+  let decoded = null;
+
   if (token) {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      req.restaurant_id = decoded.restaurant_id;
-      req.user_role = decoded.role;
-    } catch (e) { }
-  } else {
-    // Check header for ClientApp
-    const clientAppHeader = req.headers['x-restaurant-id'];
-    if (clientAppHeader) {
-       req.restaurant_id = parseInt(clientAppHeader, 10);
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (e) {
+      decoded = null; // token inválido: tratado como anónimo; rotas protegidas devolvem 401
     }
   }
-  
-  // Safeguard: fallback para Restaurante 1 se não vier (Backward-compatible antes de ClientApp update)
-  if (!req.restaurant_id) {
-     req.restaurant_id = 1; 
-  }
+
+  const tenant = resolveTenant({ decoded, headerValue: req.headers['x-restaurant-id'] });
+  if (tenant.restaurantId) req.restaurant_id = tenant.restaurantId;
+  if (decoded) req.user_role = decoded.role;
   next();
 };
 
+const requireTenant = (req, res, next) => {
+  if (req.restaurant_id || !tenantRequired(req.originalUrl.split('?')[0])) return next();
+  return res.status(400).json({
+    error: 'Restaurante não identificado. Envie o cabeçalho x-restaurant-id.',
+    code: 'TENANT_MISSING'
+  });
+};
+
 app.use(extractTenant);
+app.use(requireTenant);
 
 const requireAuthenticated = (req, res, next) => {
-  if (process.env.NODE_ENV === 'test') return next();
+  if (authBypassEnabled()) return next();
   return authenticateToken(req, res, next);
 };
 
 const requireSuperadminAuth = (req, res, next) => {
-  if (process.env.NODE_ENV === 'test') return next();
+  if (authBypassEnabled()) return next();
   if ((req.user?.role || req.user_role) !== 'superadmin') {
     return res.status(403).json({ error: 'Acesso negado. Apenas superadmins.' });
   }
@@ -1366,11 +1371,16 @@ app.get('/api/ratings/summary', async (req, res) => {
 
 // Pedidos
 app.post('/api/orders', async (req, res) => {
-  const { table_number, items, prep_time_seconds: requestedPrepSeconds } = req.body;
+  const { table_number, prep_time_seconds: requestedPrepSeconds } = req.body;
 
-  if (!table_number || !items || !Array.isArray(items) || items.length === 0) {
+  if (!table_number) {
     return res.status(400).json({ error: 'Dados do pedido inválidos.' });
   }
+  const normalized = normalizeOrderItems(req.body.items);
+  if (normalized.error) {
+    return res.status(400).json({ error: normalized.error, code: 'ORDER_ITEMS_INVALID' });
+  }
+  const items = normalized.items;
 
   // Abstração para suportar tanto Pool (Postgres) quanto Client único (SQLite)
   const isPostgres = db.getDbType() === 'postgresql';
@@ -1466,7 +1476,7 @@ app.post('/api/orders', async (req, res) => {
     else await client.query('COMMIT');
 
     // Notifica
-    wss.broadcast(JSON.stringify({
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({
       type: 'NEW_ORDER',
       payload: {
         order_id: orderId,
@@ -1523,7 +1533,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
     let eventName = 'ORDER_STATUS_UPDATE';
     if (status === 'cancelled') eventName = 'ORDER_CANCELLED';
 
-    wss.broadcast(JSON.stringify({
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({
       type: eventName,
       payload: updatedOrder
     }));
@@ -1565,12 +1575,12 @@ app.put('/api/orders/:id/prep-time', async (req, res) => {
 
     // Broadcast atualização
     const increased = Number.isFinite(add_minutes) && add_minutes > 0;
-    wss.broadcast(JSON.stringify({
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({
       type: 'PREP_TIME_UPDATE',
       payload: { order_id: updated.id, prep_time_seconds: updated.prep_time_seconds }
     }));
     if (increased) {
-      wss.broadcast(JSON.stringify({
+      wss.broadcastTo(req.restaurant_id, JSON.stringify({
         type: 'COURTESY_MESSAGE',
         payload: {
           order_id: updated.id,
@@ -1611,7 +1621,7 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
 
     const updated = updatedRows[0];
     // Broadcast cancelamento
-    wss.broadcast(JSON.stringify({ type: 'ORDER_CANCELLED', payload: updated }));
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({ type: 'ORDER_CANCELLED', payload: updated }));
     res.json(updated);
   } catch (err) {
     console.error(err);
@@ -1635,7 +1645,7 @@ app.post('/api/call-waiter', async (req, res) => {
     const newCall = rows[0];
 
     // Notifica o painel via WebSocket
-    wss.broadcast(JSON.stringify({ type: 'CALL_WAITER', payload: { id: newCall.id, table_number, reason: callReason, created_at: newCall.created_at } }));
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({ type: 'CALL_WAITER', payload: { id: newCall.id, table_number, reason: callReason, created_at: newCall.created_at } }));
 
     res.status(200).json({ message: `Notificação enviada para a mesa ${table_number}`, call: newCall });
   } catch (err) {
@@ -1678,7 +1688,7 @@ app.put('/api/waiter-calls/:id/resolve', async (req, res) => {
     }
 
     // Broadcast update
-    wss.broadcast(JSON.stringify({ type: 'WAITER_CALL_RESOLVED', payload: { id: rows[0].id, table_number: rows[0].table_number } }));
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({ type: 'WAITER_CALL_RESOLVED', payload: { id: rows[0].id, table_number: rows[0].table_number } }));
 
     res.json(rows[0]);
   } catch (err) {
@@ -2029,7 +2039,7 @@ app.put('/api/orders/:id/status-legacy-disabled', async (req, res) => {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
     // Notify via WebSocket about status change
-    wss.broadcast(JSON.stringify({ type: 'ORDER_STATUS_UPDATE', payload: rows[0] }));
+    wss.broadcastTo(req.restaurant_id, JSON.stringify({ type: 'ORDER_STATUS_UPDATE', payload: rows[0] }));
     res.json(rows[0]);
   } catch (err) {
     console.error(err);
@@ -2093,7 +2103,10 @@ app.delete('/api/ads/:id', async (req, res) => {
 const authenticateAI = (req, res, next) => {
   const expectedKey = process.env.AI_MODULE_API_KEY;
   if (!expectedKey) {
-    console.warn('AI_MODULE_API_KEY não configurado. Rotas de IA sem proteção.');
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ error: 'Rotas de IA indisponíveis: AI_MODULE_API_KEY não configurado.' });
+    }
+    console.warn('AI_MODULE_API_KEY não configurado. Rotas de IA sem proteção (apenas desenvolvimento).');
     return next();
   }
 
@@ -2200,12 +2213,15 @@ app.post('/api/chat', authenticateAI, async (req, res) => {
   }
 });
 
-app.post('/api/chat/stream', async (req, res) => {
+app.post('/api/chat/stream', chatStreamLimiter, async (req, res) => {
   const { message, mode } = req.body || {};
-  const restaurantId = req.restaurant_id || 1;
+  const restaurantId = req.restaurant_id;
 
-  if (!message) {
+  if (!message || typeof message !== 'string') {
     return res.status(400).json({ error: 'A mensagem do usuário é obrigatória.' });
+  }
+  if (message.length > 1000) {
+    return res.status(400).json({ error: 'Mensagem demasiado longa (máximo 1000 caracteres).' });
   }
 
   console.log(`[AI] Iniciando stream para restaurante ${restaurantId}, modo: "${mode || 'default'}", mensagem: "${message}"`);
@@ -3390,4 +3406,4 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-module.exports = { app, server };
+module.exports = { app, server, wss };

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "cross-env NODE_ENV=development node index.js",
-    "test": "cross-env NODE_ENV=test jest --runInBand"
+    "test": "cross-env NODE_ENV=test TEST_AUTH_BYPASS=1 DEFAULT_RESTAURANT_ID=1 jest --runInBand"
   },
   "keywords": [],
   "author": "",

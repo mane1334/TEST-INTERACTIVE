@@ -3,6 +3,11 @@ const jwt = require('jsonwebtoken');
 const isProduction = process.env.NODE_ENV === 'production';
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? undefined : 'super_secret_key_change_me_in_production');
 
+if (isProduction && !process.env.JWT_SECRET) {
+    // Sem segredo, em produção, é melhor não arrancar do que assinar tokens com um valor previsível.
+    throw new Error('JWT_SECRET não configurado. Defina JWT_SECRET antes de iniciar em produção.');
+}
+
 if (!process.env.JWT_SECRET) {
     console.warn(
         isProduction

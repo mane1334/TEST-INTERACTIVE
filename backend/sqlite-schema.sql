@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS dishes (
     category_id INTEGER,
     image_url VARCHAR(500),
     image_urls TEXT,
+    video_url TEXT,
     is_available BOOLEAN DEFAULT 1,
     preparation_time INTEGER,
     calories INTEGER,
@@ -31,6 +32,8 @@ CREATE TABLE IF NOT EXISTS orders (
     prep_time_seconds INTEGER DEFAULT 1200,
     cancel_until DATETIME,
     cancellation_reason TEXT,
+    notes TEXT,
+    access_code TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

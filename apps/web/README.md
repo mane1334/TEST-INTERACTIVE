@@ -20,8 +20,13 @@ npm run dev:web             # http://localhost:5173/?r=<ID_DO_RESTAURANTE>&mesa=
 
 `npm test` (funções puras). O fluxo completo foi verificado no navegador contra o backend real: feed, pedido, tempo real, avaliação, cancelamento, chamar funcionário e erro sem restaurante.
 
+## Como funciona o vídeo e o código do pedido
+
+- Vídeo: cada prato pode ter `video_url` (MP4 ou WebM até 25 MB, enviado com `POST /api/uploads/video`). Toca sem som quando 60% do prato está no ecrã e pára ao sair; em poupança de dados ou com "reduzir movimento" mostra o botão "Ver vídeo".
+- Código do pedido: `POST /api/orders` devolve `access_code` uma única vez. O cliente guarda-o e envia-o em `x-order-code` para ver e cancelar o pedido. Sem o código, a API responde 404 (não revela que o pedido existe).
+- Clientes sem login recebem pelo WebSocket só `id`, estado e tempo do pedido; o pessoal autenticado recebe o pedido completo.
+
 ## Ainda não tem
 
-- Vídeo por prato: o backend só guarda imagens (`image_url`, `image_urls`). Falta o campo `video_url`, o upload de vídeo e o `<video>` no feed.
-- Nota para a cozinha no pedido: a API ainda não a guarda.
-- Código de acesso por pedido (hoje o pedido é consultado pelo número sequencial).
+- Recuperar o acesso ao pedido se o cliente limpar o armazenamento do navegador (o pessoal vê sempre tudo).
+- Limpeza de vídeos antigos quando se substitui o vídeo de um prato.

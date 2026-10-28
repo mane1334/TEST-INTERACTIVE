@@ -1,5 +1,33 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { dishImages, formatPrice } from './lib.js';
+
+// Vídeo do prato: só toca quando está no ecrã (60%), sem som, e não gasta dados em modo poupança.
+function DishVideo({ src, poster }) {
+  const ref = useRef(null);
+  const [blocked, setBlocked] = useState(() => {
+    const saveData = typeof navigator !== 'undefined' && navigator.connection && navigator.connection.saveData;
+    const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    return Boolean(saveData || reduced);
+  });
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || blocked || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.6) el.play().catch(() => {});
+      else el.pause();
+    }, { threshold: [0, 0.6, 1] });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [blocked]);
+
+  return (
+    <>
+      <video ref={ref} className="slide__bg" src={blocked ? undefined : src} poster={poster} muted loop playsInline preload="metadata" aria-hidden="true" tabIndex={-1} />
+      {blocked && <button className="kt-btn kt-btn--glass" style={{ position: 'absolute', left: '50%', top: '40%', transform: 'translateX(-50%)' }} onClick={() => setBlocked(false)}>Ver vídeo</button>}
+    </>
+  );
+}
 
 const Icon = ({ d }) => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d={d} /></svg>
@@ -17,7 +45,9 @@ export default function Feed({ dishes, currency, favorites, onFavorite, onShare,
         const fav = favorites.includes(dish.id);
         return (
           <section key={dish.id} className={`slide${soldOut ? ' slide--soldout' : ''}`} aria-label={dish.name} data-dish={dish.id}>
-            {images[0]
+            {dish.video_url
+              ? <DishVideo src={dish.video_url} poster={images[0]} />
+              : images[0]
               ? <img className="slide__bg" src={images[0]} alt="" loading="lazy" decoding="async" />
               : <div className="slide__bg" style={{ background: 'radial-gradient(120% 70% at 50% 28%, #7A3B1D 0%, #3A1D10 45%, #0F0D0B 80%)' }} />}
             <div className="slide__shade" />

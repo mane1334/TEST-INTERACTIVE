@@ -22,4 +22,12 @@ Por ordem de gravidade:
   - O token do registo de restaurante saía sem `restaurant_id` e `role`, e o novo dono caía no restaurante 1. Agora leva ambos.
   - Datas do SQLite (UTC sem fuso) eram lidas como hora local: com o servidor em Maputo (UTC+2) a janela de cancelamento aparecia sempre expirada e as estatísticas ficavam 2 h desfasadas.
   - `GET /api/settings` não devolvia o nome de restaurantes novos.
+- Pedidos: código de acesso aleatório (já não se adivinha o pedido pelo número), nota para a cozinha, clientes sem login só recebem id/estado no tempo real, cancelamento do cliente só enquanto o pedido está novo.
+- Vídeo por prato: `video_url`, upload validado pelos bytes (MP4/WebM), `video_url` só aceita ficheiro nosso ou https.
 - Por fazer: 6 (Gemini no APK, a app Kotlin deixa de existir), 7 a 10.
+
+## Encontrado e ainda por corrigir (modo PostgreSQL)
+
+- Várias consultas de analytics em PostgreSQL não filtram por `restaurant_id` (`FROM orders WHERE 1=1 ...`): um restaurante veria números de outros. Em SQLite filtram.
+- `database/schema.sql` está desatualizado face ao código (falta `restaurant_id`, `image_urls`, etc.); só tem as colunas novas acrescentadas aqui. Antes de usar PostgreSQL em produção, é preciso um esquema completo e migrações.
+- Ao substituir o vídeo ou a imagem de um prato, o ficheiro antigo do vídeo não é apagado.

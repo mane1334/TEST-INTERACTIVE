@@ -82,11 +82,15 @@ function tenantRequired(path) {
 function attachWsHub({ wss, server, verifyToken, WebSocket, env = process.env }) {
   const OPEN = WebSocket.OPEN;
 
-  wss.broadcastTo = function broadcastTo(restaurantId, data) {
+  // `data` vai para o pessoal autenticado do restaurante; `publicData` (se existir) para os clientes sem login.
+  // Sem `publicData`, todos recebem `data`.
+  wss.broadcastTo = function broadcastTo(restaurantId, data, publicData) {
     const rid = parsePositiveInt(restaurantId);
     if (!rid) return;
     wss.clients.forEach((client) => {
-      if (client.readyState === OPEN && client.restaurantId === rid) client.send(data, () => {});
+      if (client.readyState !== OPEN || client.restaurantId !== rid) return;
+      const out = !client.isStaff && publicData !== undefined ? publicData : data;
+      if (out !== null) client.send(out, () => {});
     });
   };
 
@@ -132,7 +136,62 @@ function attachWsHub({ wss, server, verifyToken, WebSocket, env = process.env })
   });
 }
 
+
+// ---- Pedidos: código de acesso, nota e eventos públicos ----
+const crypto = require('crypto');
+
+// Código aleatório (12 caracteres) entregue só a quem fez o pedido. Substitui o número sequencial como prova de acesso.
+function newOrderCode() {
+  return crypto.randomBytes(9).toString('base64url');
+}
+
+function codesMatch(expected, provided) {
+  if (typeof expected !== 'string' || !expected || typeof provided !== 'string') return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(provided);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Nota para a cozinha: texto simples, até 200 caracteres. Vazio vira null.
+function normalizeNote(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+  return text || null;
+}
+
+function stripOrderSecrets(row) {
+  if (!row || typeof row !== 'object') return row;
+  const { access_code, ...rest } = row; // eslint-disable-line no-unused-vars
+  return rest;
+}
+
+// O que um cliente (sem login) pode saber sobre um evento de pedido: só o id, o estado e o tempo.
+function publicOrderEvent(type, row) {
+  const r = row || {};
+  return { type, payload: { id: r.id, order_id: r.id, status: r.status, prep_time_seconds: r.prep_time_seconds } };
+}
+
+// ---- Vídeo ----
+// Reconhece MP4 (caixa "ftyp") e WebM (cabeçalho EBML) pelos primeiros bytes, não pelo nome nem pelo tipo declarado.
+function sniffVideo(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  if (buf.slice(4, 8).toString('latin1') === 'ftyp') return 'mp4';
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return 'webm';
+  return null;
+}
+
+// video_url aceite: vazio (remove), ficheiro nosso em /uploads, ou ligação https.
+function normalizeVideoUrl(value) {
+  if (value === null || value === '') return { value: null };
+  if (typeof value !== 'string') return { error: 'video_url inválido.' };
+  const v = value.trim();
+  if (/^\/uploads\/[0-9a-f-]{36}\.(mp4|webm)$/.test(v)) return { value: v };
+  if (/^https:\/\/[^\s]{1,2000}$/.test(v)) return { value: v };
+  return { error: 'video_url deve ser um vídeo enviado por nós ou uma ligação https.' };
+}
+
 module.exports = {
+  newOrderCode, codesMatch, normalizeNote, stripOrderSecrets, publicOrderEvent, sniffVideo, normalizeVideoUrl,
   parseDbDate,
   MAX_ITEMS_PER_ORDER,
   MAX_QUANTITY_PER_ITEM,

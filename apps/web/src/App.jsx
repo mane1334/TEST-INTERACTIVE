@@ -65,7 +65,7 @@ export default function App() {
   // Reconciliar estados ao abrir (caso o WebSocket tenha falhado)
   useEffect(() => {
     orders.filter((o) => o.status === 'pending' || o.status === 'preparing').forEach((o) => {
-      api.getOrder(o.id).then((srv) => patchOrder(o.id, { status: srv.status, cancel_until: srv.cancel_until })).catch(() => {});
+      api.getOrder(o.id, o.access_code).then((srv) => patchOrder(o.id, { status: srv.status, cancel_until: srv.cancel_until })).catch(() => {});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -85,19 +85,19 @@ export default function App() {
     } catch (_) { /* cancelado */ }
   };
 
-  const sendOrder = async (table) => {
+  const sendOrder = async (table, notes) => {
     const items = trayToItems(tray);
-    const res = await api.createOrder(table, items);
+    const res = await api.createOrder(table, items, notes);
     const lines = items.map((i) => ({ name: dishesById.get(i.dish_id)?.name || `Prato ${i.dish_id}`, qty: i.quantity }));
     const total = items.reduce((s, i) => s + Number(dishesById.get(i.dish_id)?.price || 0) * i.quantity, 0);
-    setOrders((list) => [{ id: res.order_id, table_number: table, status: 'pending', total, lines, cancel_until: res.cancel_until, prep_time_seconds: res.prep_time_seconds }, ...list].slice(0, 20));
+    setOrders((list) => [{ id: res.order_id, access_code: res.access_code, notes: notes || null, table_number: table, status: 'pending', total, lines, cancel_until: res.cancel_until, prep_time_seconds: res.prep_time_seconds }, ...list].slice(0, 20));
     setTray({});
     setToast('');
     setSheet('orders');
   };
 
   const cancel = async (id) => {
-    try { const r = await api.cancelOrder(id); patchOrder(id, { status: r.status || 'cancelled' }); say('Pedido cancelado'); }
+    try { const r = await api.cancelOrder(id, orders.find((o) => o.id === id)?.access_code); patchOrder(id, { status: r.status || 'cancelled' }); say('Pedido cancelado'); }
     catch (e) { say(e.message); }
   };
   const rate = async (orderId, rating) => {

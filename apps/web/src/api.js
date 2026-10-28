@@ -27,9 +27,10 @@ async function request(path, options = {}) {
 export const api = {
   menu: () => request('/menu'),
   settings: () => request('/settings'),
-  createOrder: (table_number, items) => request('/orders', { method: 'POST', body: JSON.stringify({ table_number, items }) }),
-  getOrder: (id) => request(`/orders/${id}`),
-  cancelOrder: (id) => request(`/orders/${id}/cancel`, { method: 'POST', body: '{}' }),
+  createOrder: (table_number, items, notes) => request('/orders', { method: 'POST', body: JSON.stringify({ table_number, items, notes: notes || undefined }) }),
+  // O código do pedido (devolvido ao criar) prova que o pedido é nosso.
+  getOrder: (id, code) => request(`/orders/${id}`, { headers: { 'x-order-code': code || '' } }),
+  cancelOrder: (id, code) => request(`/orders/${id}/cancel`, { method: 'POST', body: '{}', headers: { 'x-order-code': code || '' } }),
   callWaiter: (table_number, reason) => request('/call-waiter', { method: 'POST', body: JSON.stringify({ table_number, reason }) }),
   rate: (payload) => request('/ratings', { method: 'POST', body: JSON.stringify(payload) }),
 };

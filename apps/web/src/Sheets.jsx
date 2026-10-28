@@ -6,6 +6,7 @@ const MAX_QTY = 50;
 
 export function TraySheet({ tray, dishesById, currency, tableNumber, onChange, onSend, onClose }) {
   const [table, setTable] = useState(tableNumber || '');
+  const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const entries = Object.entries(tray).filter(([, q]) => q > 0).map(([id, qty]) => ({ dish: dishesById.get(Number(id)), qty })).filter((e) => e.dish);
@@ -14,7 +15,7 @@ export function TraySheet({ tray, dishesById, currency, tableNumber, onChange, o
   const send = async () => {
     if (!table.trim()) { setError('Indica o número da mesa.'); return; }
     setBusy(true); setError('');
-    try { await onSend(table.trim()); }
+    try { await onSend(table.trim(), notes.trim()); }
     catch (e) { setError(e.message || 'Não foi possível enviar o pedido.'); setBusy(false); }
   };
 
@@ -44,6 +45,10 @@ export function TraySheet({ tray, dishesById, currency, tableNumber, onChange, o
               <input id="mesa" className="kt-input" inputMode="numeric" value={table} onChange={(e) => setTable(e.target.value)} placeholder="Ex.: 3" />
             </div>
           )}
+          <div>
+            <label htmlFor="nota" className="kt-muted" style={{ fontSize: 13 }}>Nota para a cozinha (opcional)</label>
+            <input id="nota" className="kt-input" maxLength={200} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex.: sem piri-piri" />
+          </div>
           <div className="row row--between"><span className="kt-muted">Total</span><span className="total kt-display">{formatPrice(total, currency)}</span></div>
           {error ? <div className="kt-notice kt-notice--error" role="alert">{error}</div> : null}
           <button className="kt-btn kt-btn--primary kt-btn--lg" disabled={busy} onClick={send}>{busy ? 'A enviar…' : 'Enviar à cozinha'}</button>
@@ -86,6 +91,7 @@ export function OrdersSheet({ orders, currency, onCancel, onRate, onClose }) {
             <div className="kt-display" style={{ fontSize: 24 }}>{st.label}</div>
             <div className="kt-muted" style={{ fontSize: 14 }}>{st.hint}</div>
             {o.status !== 'cancelled' && <div className="kt-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(o.status)} aria-label="Estado do pedido"><span style={{ width: `${progressPercent(o.status)}%` }} /></div>}
+            {o.notes ? <div className="kt-muted" style={{ fontSize: 14 }}>Nota: {o.notes}</div> : null}
             <div style={{ fontSize: 15, lineHeight: 1.6 }}>
               {(o.lines || []).map((l) => <div className="row row--between" key={l.name}><span>{l.qty}× {l.name}</span></div>)}
               <div className="row row--between" style={{ marginTop: 6, fontWeight: 700 }}><span>Total</span><span>{formatPrice(o.total, currency)}</span></div>

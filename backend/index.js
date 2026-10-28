@@ -20,7 +20,7 @@ const jwt = require('jsonwebtoken');
 const { authenticateToken, JWT_SECRET } = require('./middleware/auth');
 const { isLocalPath, deleteIfUnused } = require('./utils/imageCleanup');
 const security = require('./security');
-const { attachWsHub, normalizeOrderItems, authBypassEnabled, resolveTenant, tenantRequired, parseDbDate } = security;
+const { attachWsHub, normalizeOrderItems, authBypassEnabled, resolveTenant, tenantRequired, parseDbDate, newOrderCode, codesMatch, normalizeNote, stripOrderSecrets, publicOrderEvent, sniffVideo, normalizeVideoUrl } = security;
 
 let helmet = null;
 let rateLimit = null;
@@ -1098,6 +1098,40 @@ app.post('/api/uploads', imageUpload.single('file'), async (req, res) => {
   }
 });
 
+// Upload de vídeo (MP4 ou WebM, até 25 MB). O tipo é decidido pelos primeiros bytes do ficheiro.
+const videoUpload = multer({ dest: uploadDir, limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
+app.post('/api/uploads/video', (req, res) => {
+  videoUpload.single('file')(req, res, (uploadErr) => {
+    if (uploadErr) {
+      const tooBig = uploadErr.code === 'LIMIT_FILE_SIZE';
+      return res.status(tooBig ? 413 : 400).json({ error: tooBig ? 'Vídeo demasiado grande (máximo 25 MB).' : 'Falha ao receber o vídeo.' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'Nenhum vídeo enviado.' });
+
+    let kind = null;
+    try {
+      const fd = fs.openSync(req.file.path, 'r');
+      const head = Buffer.alloc(16);
+      fs.readSync(fd, head, 0, 16, 0);
+      fs.closeSync(fd);
+      kind = sniffVideo(head);
+    } catch (_) { kind = null; }
+
+    if (!kind) {
+      try { fs.unlinkSync(req.file.path); } catch (_) { }
+      return res.status(415).json({ error: 'Formato não suportado. Use MP4 ou WebM.' });
+    }
+    const filename = `${crypto.randomUUID()}.${kind}`;
+    try {
+      fs.renameSync(req.file.path, path.join(uploadDir, filename));
+    } catch (err) {
+      console.error('Erro ao guardar vídeo:', err);
+      return res.status(500).json({ error: 'Erro ao guardar o vídeo.' });
+    }
+    return res.json({ path: `/uploads/${filename}` });
+  });
+});
+
 // Cardápio para Clientes
 app.get('/api/menu', async (req, res) => {
   try {
@@ -1189,6 +1223,15 @@ app.get('/api/dishes', async (req, res) => {
 });
 
 // Criar um novo prato (Create)
+// Valida video_url antes de criar/alterar o prato, para não deixar o prato a meio.
+app.use('/api/dishes', (req, res, next) => {
+  if ((req.method === 'POST' || req.method === 'PUT') && req.body && Object.prototype.hasOwnProperty.call(req.body, 'video_url')) {
+    const parsed = normalizeVideoUrl(req.body.video_url);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+  }
+  next();
+});
+
 app.post('/api/dishes', async (req, res) => {
   const { name, description, price, category_id, image_url, image_urls, is_available, preparation_time, calories, is_spicy, is_vegetarian, is_gluten_free } = req.body;
   const normalizedImageUrls = Array.isArray(image_urls) ? JSON.stringify(image_urls.filter(Boolean)) : (image_urls || null);
@@ -1205,12 +1248,24 @@ app.post('/api/dishes', async (req, res) => {
           [name, description, price, category_id, image_url, is_available, preparation_time, calories, is_spicy || false, is_vegetarian || false, is_gluten_free || false, req.restaurant_id]
         );
     console.log('Dish created successfully:', rows[0]);
-    res.status(201).json(rows[0]);
+    const withVideo = await applyDishVideo(rows[0].id, req.restaurant_id, req.body, rows[0]);
+    if (withVideo.error) return res.status(400).json({ error: withVideo.error });
+    res.status(201).json(withVideo.row);
   } catch (err) {
     console.error('Erro ao criar prato:', err);
     res.status(500).json({ error: 'Erro ao criar prato.' });
   }
 });
+
+// Grava video_url (campo opcional) e devolve a linha atual do prato. Devolve { error } se o valor for inválido.
+const applyDishVideo = async (dishId, restaurantId, body, fallbackRow) => {
+  if (!Object.prototype.hasOwnProperty.call(body, 'video_url')) return { row: fallbackRow };
+  const parsed = normalizeVideoUrl(body.video_url);
+  if (parsed.error) return { error: parsed.error };
+  await db.query('UPDATE dishes SET video_url = $1 WHERE id = $2 AND restaurant_id = $3', [parsed.value, dishId, restaurantId]);
+  const { rows } = await db.query('SELECT * FROM dishes WHERE id = $1 AND restaurant_id = $2', [dishId, restaurantId]);
+  return { row: rows[0] || fallbackRow };
+};
 
 // Atualizar um prato (Update)
 app.put('/api/dishes/:id', async (req, res) => {
@@ -1249,7 +1304,9 @@ app.put('/api/dishes/:id', async (req, res) => {
       });
     }
 
-    res.json(updated);
+    const withVideo = updated ? await applyDishVideo(updated.id, req.restaurant_id, req.body, updated) : { row: updated };
+    if (withVideo.error) return res.status(400).json({ error: withVideo.error });
+    res.json(withVideo.row);
   } catch (err) {
     console.error('Erro ao atualizar prato:', err);
     res.status(500).json({ error: 'Erro ao atualizar prato.' });
@@ -1369,6 +1426,13 @@ app.get('/api/ratings/summary', async (req, res) => {
 
 
 // Pedidos
+// Pessoal autenticado (token do mesmo restaurante) vê qualquer pedido; os restantes precisam do código do pedido.
+const orderAccessAllowed = (req, order) => {
+  if (req.user_role) return true;
+  const provided = req.headers['x-order-code'] || req.query.code;
+  return codesMatch(order && order.access_code, typeof provided === 'string' ? provided : '');
+};
+
 app.post('/api/orders', async (req, res) => {
   const { table_number, prep_time_seconds: requestedPrepSeconds } = req.body;
 
@@ -1380,6 +1444,8 @@ app.post('/api/orders', async (req, res) => {
     return res.status(400).json({ error: normalized.error, code: 'ORDER_ITEMS_INVALID' });
   }
   const items = normalized.items;
+  const orderNotes = normalizeNote(req.body.notes);
+  const accessCode = newOrderCode();
 
   // Abstração para suportar tanto Pool (Postgres) quanto Client único (SQLite)
   const isPostgres = db.getDbType() === 'postgresql';
@@ -1441,19 +1507,19 @@ app.post('/api/orders', async (req, res) => {
 
     if (isPostgres) {
       const orderResult = await client.query(
-        `INSERT INTO orders (table_number, total_price, prep_time_seconds, cancel_until, restaurant_id)
-           VALUES ($1, $2, $3, CURRENT_TIMESTAMP + ($4 * INTERVAL '1 minute'), $5) 
+        `INSERT INTO orders (table_number, total_price, prep_time_seconds, cancel_until, restaurant_id, notes, access_code)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP + ($4 * INTERVAL '1 minute'), $5, $6, $7) 
            RETURNING id, created_at, prep_time_seconds, cancel_until`,
-        [table_number, totalPrice, defaultPrepSeconds, cancellationWindowMinutes, req.restaurant_id]
+        [table_number, totalPrice, defaultPrepSeconds, cancellationWindowMinutes, req.restaurant_id, orderNotes, accessCode]
       );
       orderId = orderResult.rows[0].id;
       orderData = orderResult.rows[0];
     } else {
       // SQLite: Insert then Select (Wrapper returns { rows: [{id: lastID}] } for insert)
       const insertRes = await client.query(
-        `INSERT INTO orders (table_number, total_price, prep_time_seconds, cancel_until, restaurant_id)
-           VALUES ($1, $2, $3, datetime('now', $4), $5)`,
-        [table_number, totalPrice, defaultPrepSeconds, `+${cancellationWindowMinutes} minutes`, req.restaurant_id]
+        `INSERT INTO orders (table_number, total_price, prep_time_seconds, cancel_until, restaurant_id, notes, access_code)
+           VALUES ($1, $2, $3, datetime('now', $4), $5, $6, $7)`,
+        [table_number, totalPrice, defaultPrepSeconds, `+${cancellationWindowMinutes} minutes`, req.restaurant_id, orderNotes, accessCode]
       );
       orderId = insertRes.rows[0].id; // lastID from wrapper
 
@@ -1488,6 +1554,7 @@ app.post('/api/orders', async (req, res) => {
     res.status(201).json({
       message: 'Pedido criado com sucesso!',
       order_id: orderId,
+      access_code: accessCode, // só é mostrado agora; o cliente guarda-o para ver e cancelar o pedido
       prep_time_seconds: orderData.prep_time_seconds,
       cancel_until: orderData.cancel_until
     });
@@ -1526,16 +1593,17 @@ app.put('/api/orders/:id/status', async (req, res) => {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
 
-    const updatedOrder = rows[0];
+    const updatedOrder = stripOrderSecrets(rows[0]);
 
-    // Notificar via WebSocket
+    // Notificar via WebSocket: pessoal vê o pedido, clientes só veem id/estado/tempo
     let eventName = 'ORDER_STATUS_UPDATE';
     if (status === 'cancelled') eventName = 'ORDER_CANCELLED';
 
-    wss.broadcastTo(req.restaurant_id, JSON.stringify({
-      type: eventName,
-      payload: updatedOrder
-    }));
+    wss.broadcastTo(
+      req.restaurant_id,
+      JSON.stringify({ type: eventName, payload: updatedOrder }),
+      JSON.stringify(publicOrderEvent(eventName, updatedOrder))
+    );
     res.json(updatedOrder);
   } catch (err) {
     console.error('Erro ao atualizar status do pedido:', err);
@@ -1599,12 +1667,16 @@ app.put('/api/orders/:id/prep-time', async (req, res) => {
 app.post('/api/orders/:id/cancel', async (req, res) => {
   const { id } = req.params;
   try {
-    const { rows } = await db.query('SELECT id, status, cancel_until FROM orders WHERE id = $1 AND restaurant_id = $2', [id, req.restaurant_id]);
-    if (rows.length === 0) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const { rows } = await db.query('SELECT id, status, cancel_until, access_code FROM orders WHERE id = $1 AND restaurant_id = $2', [id, req.restaurant_id]);
+    // Sem login, só quem tem o código do pedido o pode cancelar. Erro igual ao "não existe" para não revelar pedidos.
+    if (rows.length === 0 || !orderAccessAllowed(req, rows[0])) return res.status(404).json({ error: 'Pedido não encontrado.' });
 
     const order = rows[0];
     if (order.status === 'cancelled') {
       return res.status(400).json({ error: 'Pedido já cancelado.' });
+    }
+    if (!req.user_role && order.status !== 'pending') {
+      return res.status(403).json({ error: 'A cozinha já começou este pedido; chama um funcionário.', code: 'ORDER_NOT_CANCELLABLE' });
     }
 
     const now = new Date();
@@ -1618,9 +1690,13 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
       [id, req.restaurant_id]
     );
 
-    const updated = updatedRows[0];
+    const updated = stripOrderSecrets(updatedRows[0]);
     // Broadcast cancelamento
-    wss.broadcastTo(req.restaurant_id, JSON.stringify({ type: 'ORDER_CANCELLED', payload: updated }));
+    wss.broadcastTo(
+      req.restaurant_id,
+      JSON.stringify({ type: 'ORDER_CANCELLED', payload: updated }),
+      JSON.stringify(publicOrderEvent('ORDER_CANCELLED', updated))
+    );
     res.json(updated);
   } catch (err) {
     console.error(err);
@@ -1929,7 +2005,7 @@ app.get('/api/orders', async (req, res) => {
 
     const ordersResult = await db.query(`
       SELECT o.id, o.table_number, o.status, o.total_price, o.created_at, o.updated_at,
-        o.prep_time_seconds, o.cancel_until
+        o.prep_time_seconds, o.cancel_until, o.notes
       FROM orders o
       WHERE ${whereClause}
       ORDER BY o.created_at DESC
@@ -2013,13 +2089,13 @@ app.get('/api/orders/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const { rows } = await db.query(`
-      SELECT o.id, o.table_number, o.status, o.total_price, o.created_at, o.updated_at, o.prep_time_seconds, o.cancel_until
+      SELECT o.id, o.table_number, o.status, o.total_price, o.created_at, o.updated_at, o.prep_time_seconds, o.cancel_until, o.notes, o.access_code
       FROM orders o
       WHERE o.id = $1 AND o.restaurant_id = $2
     `, [id, req.restaurant_id]);
 
-    if (rows.length === 0) return res.status(404).json({ error: 'Pedido não encontrado.' });
-    res.json(rows[0]);
+    if (rows.length === 0 || !orderAccessAllowed(req, rows[0])) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    res.json(stripOrderSecrets(rows[0]));
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar pedido.' });
   }
@@ -2043,8 +2119,12 @@ app.put('/api/orders/:id/status-legacy-disabled', async (req, res) => {
       return res.status(404).json({ error: 'Pedido não encontrado.' });
     }
     // Notify via WebSocket about status change
-    wss.broadcastTo(req.restaurant_id, JSON.stringify({ type: 'ORDER_STATUS_UPDATE', payload: rows[0] }));
-    res.json(rows[0]);
+    wss.broadcastTo(
+      req.restaurant_id,
+      JSON.stringify({ type: 'ORDER_STATUS_UPDATE', payload: stripOrderSecrets(rows[0]) }),
+      JSON.stringify(publicOrderEvent('ORDER_STATUS_UPDATE', rows[0]))
+    );
+    res.json(stripOrderSecrets(rows[0]));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao atualizar status do pedido.' });

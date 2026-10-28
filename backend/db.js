@@ -81,6 +81,7 @@ const createSQLiteTables = () => {
       category_id INTEGER,
       image_url TEXT,
       image_urls TEXT,
+      video_url TEXT,
       is_available INTEGER DEFAULT 1,
       preparation_time INTEGER,
       calories INTEGER,
@@ -100,6 +101,8 @@ const createSQLiteTables = () => {
       prep_time_seconds INTEGER,
       cancel_until DATETIME,
       cancellation_reason TEXT,
+      notes TEXT,
+      access_code TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
@@ -265,6 +268,7 @@ const migrateTables = () => {
 
     const additionalDishColumns = [
       ['image_urls', 'TEXT'],
+      ['video_url', 'TEXT'],
       ['is_spicy', 'INTEGER DEFAULT 0'],
       ['is_vegetarian', 'INTEGER DEFAULT 0'],
       ['is_gluten_free', 'INTEGER DEFAULT 0'],
@@ -283,12 +287,14 @@ const migrateTables = () => {
   sqliteDb.all("PRAGMA table_info(orders)", (err, rows) => {
     if (err || rows.length === 0) return;
 
-    if (!rows.some(row => row.name === 'cancellation_reason')) {
-      console.log('Migrando: Adicionando column cancellation_reason em orders...');
-      sqliteDb.run("ALTER TABLE orders ADD COLUMN cancellation_reason TEXT", (alterErr) => {
-        if (alterErr) console.error('Erro ao adicionar cancellation_reason:', alterErr);
-      });
-    }
+    [['cancellation_reason', 'TEXT'], ['notes', 'TEXT'], ['access_code', 'TEXT']].forEach(([colName, colDef]) => {
+      if (!rows.some(row => row.name === colName)) {
+        console.log(`Migrando: Adicionando column ${colName} em orders...`);
+        sqliteDb.run(`ALTER TABLE orders ADD COLUMN ${colName} ${colDef}`, (alterErr) => {
+          if (alterErr) console.error(`Erro ao adicionar ${colName}:`, alterErr);
+        });
+      }
+    });
   });
 
   const tenantTables = ['categories', 'dishes', 'orders', 'users', 'advertisements', 'ratings', 'settings', 'waiter_calls', 'ai_memory_entries'];

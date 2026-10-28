@@ -38,6 +38,17 @@ function normalizeOrderItems(items) {
   return { items: Array.from(merged, ([dish_id, quantity]) => ({ dish_id, quantity })) };
 }
 
+// O SQLite guarda datas em UTC no formato 'YYYY-MM-DD HH:MM:SS' (sem fuso). `new Date()` lê isso
+// como hora local do servidor; em Maputo (UTC+2) todas as datas ficavam 2 horas erradas e a
+// janela de cancelamento aparecia sempre expirada. Aqui tratamo-las como UTC.
+function parseDbDate(value) {
+  if (value instanceof Date) return value;
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value.trim())) {
+    return new Date(value.trim().replace(' ', 'T') + 'Z');
+  }
+  return new Date(value);
+}
+
 // O desvio de autenticação para testes só existe fora de produção e com pedido explícito.
 function authBypassEnabled(env = process.env) {
   return env.NODE_ENV === 'test' && env.TEST_AUTH_BYPASS === '1';
@@ -122,6 +133,7 @@ function attachWsHub({ wss, server, verifyToken, WebSocket, env = process.env })
 }
 
 module.exports = {
+  parseDbDate,
   MAX_ITEMS_PER_ORDER,
   MAX_QUANTITY_PER_ITEM,
   parsePositiveInt,

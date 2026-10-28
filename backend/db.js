@@ -30,8 +30,12 @@ const initSQLite = () => {
   try {
     // Load SQLite only when the application is configured to use SQLite.
     const sqlite3 = require('sqlite3').verbose();
-    const dbPath = path.join(__dirname, 'database.sqlite');
+    const dbPath = process.env.SQLITE_PATH || path.join(__dirname, 'database.sqlite');
     sqliteDb = new sqlite3.Database(dbPath);
+    // Modo serializado: as instruções correm pela ordem em que foram pedidas.
+    // Sem isto, num arranque com base de dados nova, consultas podiam correr antes de as tabelas existirem
+    // ("no such table: restaurants") e o servidor caía no primeiro arranque.
+    sqliteDb.serialize();
     console.log('✅ SQLite inicializado');
 
     // Criar tabelas se não existirem
@@ -453,12 +457,16 @@ const query = async (text, params = []) => {
     }
   } else if (dbType === 'sqlite' && sqliteDb) {
     return new Promise((resolve, reject) => {
-      if (convertedText.trim().toUpperCase().startsWith('SELECT')) {
+      // Consultas que devolvem linhas (SELECT/WITH e qualquer INSERT/UPDATE/DELETE ... RETURNING).
+      // Antes, um UPDATE ... RETURNING * devolvia só { id: lastID } (um id antigo e sem os campos),
+      // por isso o painel e o tempo real recebiam estados vazios em SQLite.
+      const returnsRows = /^\s*(SELECT|WITH)\b/i.test(convertedText) || /\bRETURNING\b/i.test(convertedText);
+      if (returnsRows) {
         sqliteDb.all(convertedText, convertedParams, (err, rows) => {
           if (err) {
             reject(err);
           } else {
-            resolve({ rows });
+            resolve({ rows, rowCount: rows.length });
           }
         });
       } else {

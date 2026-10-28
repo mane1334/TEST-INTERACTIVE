@@ -20,7 +20,7 @@ const jwt = require('jsonwebtoken');
 const { authenticateToken, JWT_SECRET } = require('./middleware/auth');
 const { isLocalPath, deleteIfUnused } = require('./utils/imageCleanup');
 const security = require('./security');
-const { attachWsHub, normalizeOrderItems, authBypassEnabled, resolveTenant, tenantRequired } = security;
+const { attachWsHub, normalizeOrderItems, authBypassEnabled, resolveTenant, tenantRequired, parseDbDate } = security;
 
 let helmet = null;
 let rateLimit = null;
@@ -756,14 +756,14 @@ async function gatherRestaurantContext(restaurantId) {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   const recentOrders = (ordersResult.rows || []).filter((order) => {
-    const createdAt = order.created_at ? new Date(order.created_at) : null;
+    const createdAt = order.created_at ? parseDbDate(order.created_at) : null;
     return createdAt && !Number.isNaN(createdAt.getTime()) && createdAt >= thirtyDaysAgo;
   });
 
   const recentOrderIds = new Set(recentOrders.map((order) => Number(order.id)));
   const recentOrderItems = (orderItemsResult.rows || []).filter((item) => recentOrderIds.has(Number(item.order_id)));
   const recentRatings = (ratingsResult.rows || []).filter((rating) => {
-    const createdAt = rating.created_at ? new Date(rating.created_at) : null;
+    const createdAt = rating.created_at ? parseDbDate(rating.created_at) : null;
     return createdAt && !Number.isNaN(createdAt.getTime()) && createdAt >= thirtyDaysAgo;
   });
 
@@ -819,7 +819,7 @@ async function gatherRestaurantContext(restaurantId) {
 
   const peakHours = Object.entries(
     recentOrders.reduce((acc, order) => {
-      const createdAt = order.created_at ? new Date(order.created_at) : null;
+      const createdAt = order.created_at ? parseDbDate(order.created_at) : null;
       if (!createdAt || Number.isNaN(createdAt.getTime())) return acc;
       const hour = String(createdAt.getHours()).padStart(2, '0');
       acc[hour] = (acc[hour] || 0) + 1;
@@ -833,8 +833,8 @@ async function gatherRestaurantContext(restaurantId) {
   const completedDurations = recentOrders
     .filter((order) => order.status === 'completed' && order.updated_at && order.created_at)
     .map((order) => {
-      const createdAt = new Date(order.created_at);
-      const updatedAt = new Date(order.updated_at);
+      const createdAt = parseDbDate(order.created_at);
+      const updatedAt = parseDbDate(order.updated_at);
       if (Number.isNaN(createdAt.getTime()) || Number.isNaN(updatedAt.getTime())) return null;
       return Math.max(0, Math.round((updatedAt.getTime() - createdAt.getTime()) / 1000));
     })
@@ -1051,15 +1051,14 @@ app.post('/api/auth/register-restaurant', async (req, res) => {
       )
     );
 
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role, restaurant_id: user.restaurant_id },
-      JWT_SECRET,
-      { expiresIn: '8h' }
-    );
+    // Em SQLite o INSERT só devolve o id; por isso o token usa os valores que acabámos de gravar.
+    // (Sem isto o token saía sem restaurant_id/role e o novo dono caía no restaurante 1.)
+    const sessionUser = { id: user.id, username, role: 'admin', restaurant_id: restaurant.id };
+    const token = jwt.sign(sessionUser, JWT_SECRET, { expiresIn: '8h' });
 
     res.status(201).json({
       token,
-      user,
+      user: sessionUser,
       restaurant,
       next_step: '/onboarding',
     });
@@ -1609,7 +1608,7 @@ app.post('/api/orders/:id/cancel', async (req, res) => {
     }
 
     const now = new Date();
-    const cancelUntil = order.cancel_until ? new Date(order.cancel_until) : null;
+    const cancelUntil = order.cancel_until ? parseDbDate(order.cancel_until) : null;
     if (!cancelUntil || now > cancelUntil) {
       return res.status(403).json({ error: 'Janela de cancelamento expirada.' });
     }
@@ -1705,6 +1704,11 @@ app.get('/api/settings', async (req, res) => {
       acc[row.key] = row.value;
       return acc;
     }, {});
+    // Restaurantes novos não têm a definição restaurant_name: usa o nome com que foram registados.
+    if (!settings.restaurant_name) {
+      const named = await db.query('SELECT name FROM restaurants WHERE id = $1', [req.restaurant_id]);
+      if (named.rows?.[0]?.name) settings.restaurant_name = named.rows[0].name;
+    }
     res.json(settings);
   } catch (err) {
     console.error('Erro ao buscar configurações:', err);
@@ -1987,7 +1991,7 @@ app.get('/api/orders/export', async (req, res) => {
       'Mesa': order.table_number,
       'Status': order.status,
       'Valor Total': order.total_price,
-      'Data': new Date(order.created_at).toLocaleString('pt-MZ'),
+      'Data': parseDbDate(order.created_at).toLocaleString('pt-MZ'),
       'Itens': order.items.map(item => `${item.name} (x${item.quantity})`).join(', ')
     }));
 

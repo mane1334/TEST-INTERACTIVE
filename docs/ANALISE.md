@@ -12,3 +12,14 @@ Por ordem de gravidade:
 8. `index.js` monolítico, poucos testes, sem CI.
 9. Logs e `debug.keystore` no git (não copiados para este repositório).
 10. `importDatabase` no painel sem rota no backend; rotas `legacy-disabled`.
+
+## Corrigido neste repositório
+
+- 1, 2, 3, 4, 5: WebSocket autenticado e isolado, restaurante sem fallback, quantidades validadas, desvio de testes explícito, `/chat/stream` limitado (testes em `backend/tests/security.test.js`).
+- Encontrado ao testar de ponta a ponta com SQLite:
+  - Primeiro arranque com base nova caía com `no such table: restaurants` (instruções SQLite fora de ordem). Agora o modo é serializado.
+  - `UPDATE/INSERT ... RETURNING` devolvia só `{ id: lastID }`; o tempo real enviava estados vazios. Agora devolve as linhas.
+  - O token do registo de restaurante saía sem `restaurant_id` e `role`, e o novo dono caía no restaurante 1. Agora leva ambos.
+  - Datas do SQLite (UTC sem fuso) eram lidas como hora local: com o servidor em Maputo (UTC+2) a janela de cancelamento aparecia sempre expirada e as estatísticas ficavam 2 h desfasadas.
+  - `GET /api/settings` não devolvia o nome de restaurantes novos.
+- Por fazer: 6 (Gemini no APK, a app Kotlin deixa de existir), 7 a 10.

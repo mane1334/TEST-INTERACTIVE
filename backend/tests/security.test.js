@@ -202,3 +202,16 @@ describe('WebSocket: autenticação e isolamento', () => {
     [normal, anon, root].forEach((c) => c.ws.close());
   });
 });
+
+describe('datas do SQLite (UTC sem fuso)', () => {
+  const { parseDbDate } = security;
+  test('lê "YYYY-MM-DD HH:MM:SS" como UTC, qualquer que seja o fuso do servidor', () => {
+    expect(parseDbDate('2026-10-28 05:02:08').toISOString()).toBe('2026-10-28T05:02:08.000Z');
+    expect(parseDbDate('2026-10-28T05:02:08').toISOString()).toBe('2026-10-28T05:02:08.000Z');
+  });
+  test('mantém datas com fuso e objetos Date', () => {
+    expect(parseDbDate('2026-10-28T05:02:08+02:00').toISOString()).toBe('2026-10-28T03:02:08.000Z');
+    const d = new Date(0);
+    expect(parseDbDate(d)).toBe(d);
+  });
+});

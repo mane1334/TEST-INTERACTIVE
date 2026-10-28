@@ -1,0 +1,36 @@
+/* Tokens do Kutsakai Restaurante: escuro, orientado a foto e vídeo.
+   O restaurante escolhe a cor de destaque com data-accent no <html>. */
+:root {
+  --kt-bg: #0F0D0B;
+  --kt-surface: #1A1714;
+  --kt-surface-2: #26211D;
+  --kt-surface-3: #3A332D;
+  --kt-border: #3A332D;
+  --kt-text: #F4EFE8;
+  --kt-text-soft: #E4DACD;
+  --kt-muted: #B5ABA0;
+
+  --kt-accent: #F0803F;
+  --kt-on-accent: #1A0E06;
+
+  --kt-ok: #6FCF97;
+  --kt-ok-bg: #1F2A22;
+  --kt-ok-text: #BFE8CF;
+  --kt-warn: #E5C36A;
+  --kt-danger-bg: #3A2A22;
+  --kt-danger-text: #F2C7B0;
+
+  --kt-font-display: 'Bricolage Grotesque', system-ui, sans-serif;
+  --kt-font-body: 'DM Sans', system-ui, sans-serif;
+
+  --kt-radius-sm: 12px;
+  --kt-radius: 16px;
+  --kt-radius-lg: 22px;
+  --kt-radius-sheet: 28px;
+  --kt-tap: 44px; /* alvo mínimo de toque */
+}
+
+[data-accent="brasa"]    { --kt-accent: #F0803F; }
+[data-accent="floresta"] { --kt-accent: #6FCF97; }
+[data-accent="oceano"]   { --kt-accent: #7FB2E5; }
+[data-accent="ouro"]     { --kt-accent: #E5C36A; }

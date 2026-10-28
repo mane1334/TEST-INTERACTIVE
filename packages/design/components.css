@@ -1,0 +1,33 @@
+/* Componentes base (prefixo kt-). Sem JavaScript, usáveis em qualquer framework. */
+.kt-app { background: var(--kt-bg); color: var(--kt-text); font-family: var(--kt-font-body); }
+.kt-display { font-family: var(--kt-font-display); font-weight: 700; letter-spacing: -.01em; }
+.kt-muted { color: var(--kt-muted); }
+
+.kt-btn { min-height: var(--kt-tap); padding: 0 20px; border: 0; border-radius: var(--kt-radius); font: 700 16px var(--kt-font-body); cursor: pointer; background: var(--kt-surface-2); color: var(--kt-text); }
+.kt-btn--primary { background: var(--kt-accent); color: var(--kt-on-accent); }
+.kt-btn--ghost { background: transparent; border: 1px solid #5A5149; }
+.kt-btn--glass { background: rgba(244,239,232,.16); color: var(--kt-text); }
+.kt-btn--lg { min-height: 56px; font-size: 17px; }
+.kt-btn--icon { width: 52px; min-height: 52px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.kt-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.kt-btn:focus-visible, .kt-chip:focus-visible, .kt-input:focus-visible { outline: 3px solid var(--kt-accent); outline-offset: 2px; }
+
+.kt-chip { flex: none; min-height: var(--kt-tap); padding: 0 16px; border: 0; border-radius: 999px; background: rgba(244,239,232,.14); color: var(--kt-text); font: 500 14px var(--kt-font-body); cursor: pointer; }
+.kt-chip--active { background: var(--kt-accent); color: var(--kt-on-accent); font-weight: 700; }
+
+.kt-badge { display: inline-block; padding: 5px 10px; border-radius: 999px; background: rgba(244,239,232,.16); font: 700 12px var(--kt-font-body); }
+.kt-card { background: var(--kt-surface); border-radius: var(--kt-radius-lg); padding: 16px; }
+.kt-card--item { background: var(--kt-surface-2); border-radius: 18px; }
+
+.kt-input { width: 100%; box-sizing: border-box; min-height: 48px; border-radius: 14px; border: 1px solid var(--kt-border); background: var(--kt-bg); color: var(--kt-text); padding: 0 14px; font: 400 15px var(--kt-font-body); }
+
+.kt-sheet { background: var(--kt-surface); border-radius: var(--kt-radius-sheet) var(--kt-radius-sheet) 0 0; padding: 12px 20px 24px; box-sizing: border-box; }
+.kt-sheet__grip { width: 44px; height: 5px; border-radius: 3px; background: #5A5149; margin: 0 auto 18px; }
+
+.kt-progress { height: 8px; border-radius: 4px; background: var(--kt-surface-3); overflow: hidden; }
+.kt-progress > span { display: block; height: 100%; background: var(--kt-accent); }
+
+.kt-notice { padding: 14px 16px; border-radius: var(--kt-radius-sm); background: var(--kt-ok-bg); color: var(--kt-ok-text); font-size: 14px; }
+.kt-notice--error { background: var(--kt-danger-bg); color: var(--kt-danger-text); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; scroll-behavior: auto !important; transition: none !important; } }

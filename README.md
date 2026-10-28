@@ -5,11 +5,11 @@ Gestão de restaurante e cardápio digital em feed (foto e vídeo por prato), co
 ## Estrutura
 
 ```
-backend/          API reaproveitada do Kutsakai-Res (a endurecer, ver docs/ANALISE.md)
-apps/web          cardápio do cliente (feed)         [por fazer]
+backend/          API reaproveitada do Kutsakai-Res (endurecida, ver docs/ANALISE.md)
+apps/web          cardápio do cliente (feed)         [feito, ver apps/web/README.md]
 apps/tablet       cliente em modo kiosk (Capacitor)  [por fazer]
 apps/admin        painel do restaurante e superadmin [por fazer]
-packages/design   tokens e componentes partilhados   [por fazer]
+packages/design   tokens e componentes partilhados   [feito]
 docs/             análise e API original
 ```
 

@@ -1,0 +1,11 @@
+{
+  "name": "kutsakai-restaurante",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:web": "npm --workspace apps/web run dev",
+    "build:web": "npm --workspace apps/web run build",
+    "test:backend": "npm --prefix backend test"
+  }
+}
